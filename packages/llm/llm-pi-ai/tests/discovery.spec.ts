@@ -143,6 +143,39 @@ describe('draft-provider model discovery', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('keeps advertised input modalities for both listable protocol families', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({
+        data: [
+          { id: 'vision', input_modalities: ['image', 'text'] },
+          { id: 'declared-text', input_modalities: ['text'] },
+          { id: 'mixed', input_modalities: ['audio', 'image', 'text', 'image'] },
+          { id: 'unreadable', input_modalities: 'image' },
+          { id: 'unsupported', input_modalities: ['audio'] },
+          { id: 'nested', architecture: { input_modalities: ['image'] } },
+          { id: 'empty', input_modalities: [] },
+        ],
+      }),
+    })
+    const ctx = await harness()
+    const expected = [
+      { id: 'vision', name: 'vision', inputModalities: ['text', 'image'] },
+      { id: 'declared-text', name: 'declared-text', inputModalities: ['text'] },
+      { id: 'mixed', name: 'mixed', inputModalities: ['text', 'image'] },
+      { id: 'unreadable', name: 'unreadable' },
+      { id: 'unsupported', name: 'unsupported' },
+      { id: 'nested', name: 'nested', inputModalities: ['image'] },
+      { id: 'empty', name: 'empty' },
+    ]
+
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url }))
+      .resolves.toEqual(expected)
+    await expect(ctx.llm.discoverModels('llm-pi-ai', {
+      baseURL: server.url,
+      api: 'anthropic-messages',
+    })).resolves.toEqual(expected)
+  })
+
   it('reads an enriched models map using route ids and nested capacities', async () => {
     const server = await listingServer({
       body: JSON.stringify({
@@ -550,10 +583,19 @@ const RECORDED_LISTINGS = [
     file: 'openrouter-2026-09-02.json',
     api: 'openai-completions',
     models: [
-      { id: 'anthropic/claude-fable-5.1', name: 'Anthropic: Claude Fable 5.1', contextWindow: 1_000_000, maxTokens: 128_000 },
+      {
+        id: 'anthropic/claude-fable-5.1', name: 'Anthropic: Claude Fable 5.1',
+        contextWindow: 1_000_000, maxTokens: 128_000, inputModalities: ['text', 'image'],
+      },
       // The router's own aggregate route reports no completion cap.
-      { id: 'openrouter/auto-beta', name: 'Auto Router (Beta)', contextWindow: 2_000_000 },
-      { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek: DeepSeek V4 Flash 0423', contextWindow: 1_048_576, maxTokens: 384_000 },
+      {
+        id: 'openrouter/auto-beta', name: 'Auto Router (Beta)',
+        contextWindow: 2_000_000, inputModalities: ['text', 'image'],
+      },
+      {
+        id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek: DeepSeek V4 Flash 0423',
+        contextWindow: 1_048_576, maxTokens: 384_000, inputModalities: ['text'],
+      },
     ],
   },
   {

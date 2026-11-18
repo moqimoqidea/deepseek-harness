@@ -150,6 +150,21 @@ function adopt(candidate: LlmDiscoveredModel): ModelDraft {
 }
 
 /**
+ * Fill input modalities a kept row does not declare from the candidate that
+ * names it. A non-empty declaration, including a text-only override, stays as
+ * configured.
+ * @param row - configured row the picker keeps.
+ * @param candidate - the listed candidate with the same id.
+ * @returns the row with missing input modalities added.
+ */
+function fillInputModalities(row: ModelDraft, candidate: LlmDiscoveredModel): ModelDraft {
+  if (candidate.inputModalities === undefined) return row
+  const declared = row['input']
+  if (Array.isArray(declared) && declared.length > 0) return row
+  return { ...row, input: [...candidate.inputModalities] }
+}
+
+/**
  * Render the model list with its fetch action.
  * @param props - the drafted rows, probe target, wire face, and copy.
  * @returns the model-list editor.
@@ -264,8 +279,15 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
     const id = textOf(model, 'id')
     if (listed.has(id) && !isPicked(id)) removedRows.add(at)
   })
-  // A kept row the user already tuned wins over the provider's own numbers.
-  const keptRows = models.filter((_model, at) => !removedRows.has(at))
+  const candidatesById = new Map(activeCandidates.map(candidate => [candidate.id, candidate]))
+  // A kept row the user already tuned wins over the provider's own numbers,
+  // but input modalities it never declared are adopted along with the listing.
+  const keptRows = models
+    .filter((_model, at) => !removedRows.has(at))
+    .map((model) => {
+      const candidate = candidatesById.get(textOf(model, 'id'))
+      return candidate === undefined ? model : fillInputModalities(model, candidate)
+    })
   const keptIds = new Set(keptRows.map(model => textOf(model, 'id')))
   const addedRows = activeCandidates
     .filter(candidate => isPicked(candidate.id) && !keptIds.has(candidate.id))
