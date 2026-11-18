@@ -173,6 +173,53 @@ describe('draft-provider model discovery', () => {
     ])
   })
 
+  it('adopts the effort levels and default an enriched listing declares', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({
+        data: [
+          { id: 'reasoning', effort: { supported_levels: ['max', 'low', 'high', 'low'], default_level: 'high' } },
+          { id: 'off-only', effort: { supported_levels: ['off'] } },
+          { id: 'unknown-level', effort: { supported_levels: ['low', 'ultra'], default_level: 'high' } },
+          { id: 'malformed', effort: 'low' },
+          { id: 'unreadable-levels', effort: { supported_levels: 'high' } },
+          { id: 'no-default', effort: { supported_levels: ['minimal', 'low'] } },
+          { id: 'with-off', effort: { supported_levels: ['off', 'high'], default_level: 'off' } },
+        ],
+      }),
+    })
+    const ctx = await harness()
+
+    const models = await ctx.llm.discoverModels('llm-pi-ai', {
+      baseURL: server.url,
+      api: 'anthropic-messages',
+    })
+
+    expect(models).toEqual([
+      {
+        id: 'reasoning', name: 'reasoning',
+        reasoning: {
+          efforts: [
+            { id: 'low', name: 'low' },
+            { id: 'high', name: 'high' },
+            { id: 'max', name: 'max' },
+          ],
+          defaultEffort: 'high',
+        },
+      },
+      { id: 'off-only', name: 'off-only' },
+      // An unknown spelling has no pi-ai level to select; the default naming
+      // it is ignored rather than pointing at a level the reply dropped.
+      { id: 'unknown-level', name: 'unknown-level', reasoning: { efforts: [{ id: 'low', name: 'low' }] } },
+      { id: 'malformed', name: 'malformed' },
+      { id: 'unreadable-levels', name: 'unreadable-levels' },
+      { id: 'no-default', name: 'no-default', reasoning: { efforts: [{ id: 'minimal', name: 'minimal' }, { id: 'low', name: 'low' }] } },
+      {
+        id: 'with-off', name: 'with-off',
+        reasoning: { efforts: [{ id: 'off', name: 'off' }, { id: 'high', name: 'high' }], defaultEffort: 'off' },
+      },
+    ])
+  })
+
   it('uses Anthropic model-listing paths, headers, and capacity fields', async () => {
     const server = await listingServer({
       body: JSON.stringify({

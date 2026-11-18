@@ -44,7 +44,8 @@ function readEfforts(model: DeepSeekModelDraft): Entries | undefined {
 }
 
 /**
- * Replace a row's declared levels, preserving every other field.
+ * Replace a row's declared levels, preserving every other field. A default
+ * level the edit removes is dropped with it.
  * @param model - model row as drafted.
  * @param entries - the levels to write in row order, or `undefined` to remove the field.
  * @returns the replacement row.
@@ -54,9 +55,17 @@ function withEfforts(model: DeepSeekModelDraft, entries: Entries | undefined): D
   if (entries === undefined) {
     // Absent is how a hand-declared model says it does not reason.
     Reflect.deleteProperty(next, 'reasoningEfforts')
+    Reflect.deleteProperty(next, 'defaultReasoningEffort')
     return next
   }
   next['reasoningEfforts'] = Object.fromEntries(entries)
+  // A selected level this row edit removed would fail resolution, so the
+  // provider default applies again instead of keeping an unserviceable row.
+  const defaultEffort = next['defaultReasoningEffort']
+  if (defaultEffort !== undefined
+    && (typeof defaultEffort !== 'string' || !entries.some(([level]) => level === defaultEffort))) {
+    Reflect.deleteProperty(next, 'defaultReasoningEffort')
+  }
   return next
 }
 

@@ -12,9 +12,9 @@ import { getAllBuiltinModels, getBuiltinModels, getBuiltinProviders } from '@ear
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { Api, Model, OpenAICompletionsCompat, Provider } from '@earendil-works/pi-ai'
-import { catalogModels, catalogProvider } from '../src/catalog.ts'
+import { catalogModels, catalogProvider, getSupportedThinkingLevels } from '../src/catalog.ts'
 import { resolveProfiles } from '../src/config.ts'
-import { createModels, createProvider, getSupportedThinkingLevels } from '../src/models.ts'
+import { createModels, createProvider } from '../src/models.ts'
 import { buildProvider, supportedProtocols } from '../src/provider.ts'
 import { assemble } from './assemble.ts'
 import { memoryAuth } from './auth-double.ts'
@@ -716,6 +716,23 @@ describe('per-model reasoning efforts', () => {
   it('offers exactly the declared keys: leaving off out makes thinking mandatory', () => {
     const model = modelOf(declared([{ id: 'm', reasoningEfforts: { high: 'high' } }]))
     expect(getSupportedThinkingLevels(model)).toEqual(['high'])
+  })
+
+  it('keeps a declared default that the model offers', () => {
+    const resolved = resolveProfiles(declared([{
+      id: 'm',
+      reasoningEfforts: { off: null, low: 'low', high: 'high' },
+      defaultReasoningEffort: 'high',
+    }]))
+    expect(resolved.get('acme-gateway')?.defaultReasoningEfforts.get('m')).toBe('high')
+  })
+
+  it('refuses a declared default the model does not offer', () => {
+    expect(() => resolveProfiles(declared([{
+      id: 'm',
+      reasoningEfforts: { high: 'high' },
+      defaultReasoningEffort: 'low',
+    }]))).toThrow(/model "m" sets defaultReasoningEffort "low", which it does not offer/)
   })
 
   it('narrows a catalog model’s levels in place', () => {

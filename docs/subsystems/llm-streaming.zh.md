@@ -799,6 +799,8 @@ interface LlmDiscoveredModel {
   maxTokens?: number
   /** Accepted input types when disclosed by the catalog or endpoint; absent means unknown. */
   inputModalities?: readonly ModelModality[]
+  /** Selectable reasoning efforts the endpoint discloses, with its default when declared. */
+  reasoning?: LlmModelReasoningInfo
 }
 ```
 

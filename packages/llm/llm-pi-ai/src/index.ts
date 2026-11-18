@@ -50,6 +50,7 @@
  *               off:
  *               high: high
  *               max: ultra
+ *             defaultReasoningEffort: high
  * ```
  *
  * @module @deepseek-ai/dsh-llm-pi-ai
