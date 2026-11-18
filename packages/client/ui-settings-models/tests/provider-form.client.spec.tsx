@@ -657,6 +657,45 @@ describe('endpoint interrogation', () => {
     ])
   })
 
+  it('adds disclosed reasoning to a kept model and leaves declared levels alone', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([
+      {
+        id: 'bare',
+        reasoning: {
+          efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }],
+          defaultEffort: 'high',
+        },
+      },
+      { id: 'tuned', reasoning: { efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }] } },
+    ])))
+    const { mutate } = await mountSection({
+      discover,
+      providers: {
+        openai: {
+          baseURL: 'https://proxy.example/v1',
+          models: [{ id: 'bare', contextWindow: 111 }, { id: 'tuned', reasoningEfforts: { high: 'high' } }],
+        },
+      },
+    })
+    openEditor('openai')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalled() })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual([
+      {
+        id: 'bare',
+        contextWindow: 111,
+        reasoningEfforts: { low: 'low', high: 'high' },
+        defaultReasoningEffort: 'high',
+      },
+      { id: 'tuned', reasoningEfforts: { high: 'high' } },
+    ])
+  })
+
   it('removes an unchecked configured model and keeps one the provider does not list', async () => {
     const discover = vi.fn(() => Promise.resolve(ok([{ id: 'gone' }, { id: 'stays' }, { id: 'new' }])))
     const { mutate } = await mountSection({
@@ -1022,6 +1061,196 @@ describe('hand-declared providers', () => {
       expectedRevision: 7,
     })
     expect(set).toHaveBeenCalledWith('ACME_GATEWAY_API_KEY', 'gw-key')
+  })
+
+  it('adopts disclosed reasoning and adaptive Anthropic thinking with the profile', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([{
+      id: 'gateway-reasoner',
+      name: 'Gateway Reasoner',
+      contextWindow: 200_000,
+      maxTokens: 8192,
+      inputModalities: ['text'],
+      reasoning: {
+        efforts: [
+          { id: 'low', name: 'low' },
+          { id: 'high', name: 'high' },
+          { id: 'max', name: 'max' },
+        ],
+        defaultEffort: 'high',
+      },
+    }])))
+    const { mutate, onClose } = mountCard({}, { discover })
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme-gateway' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), {
+      target: { value: 'https://gateway.acme.example/api/v1' },
+    })
+    fireEvent.change(screen.getByLabelText(en.customApi), { target: { value: 'anthropic-messages' } })
+    fireEvent.change(screen.getByLabelText(en.keyInput), { target: { value: 'gw-key' } })
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+
+    expandModel(1)
+    const levelSelects = within(screen.getByRole('group', { name: `${en.modelReasoning} 1` }))
+      .getAllByRole<HTMLSelectElement>('combobox')
+    expect(levelSelects.map(select => select.value)).toEqual(['low', 'high', 'max'])
+
+    fireEvent.click(screen.getByText(en.create))
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual({
+      apiKeyEnv: 'ACME_GATEWAY_API_KEY',
+      api: 'anthropic-messages',
+      baseURL: 'https://gateway.acme.example/api/v1',
+      models: [{
+        id: 'gateway-reasoner',
+        name: 'Gateway Reasoner',
+        contextWindow: 200_000,
+        maxTokens: 8192,
+        input: ['text'],
+        reasoningEfforts: { low: 'low', high: 'high', max: 'max' },
+        defaultReasoningEffort: 'high',
+        compat: { forceAdaptiveThinking: true },
+      }],
+    })
+  })
+
+  it('adopts reasoning without a protocol switch on an OpenAI-compatible route', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([{
+      id: 'acme-reasoner',
+      reasoning: { efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }] },
+    }])))
+    const { mutate, onClose } = mountCard({}, { discover })
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://acme.test/v1' } })
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+
+    fireEvent.click(screen.getByText(en.create))
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    const profile = firstMutate(mutate).ops[0]?.value
+    expect(profile).toMatchObject({
+      models: [{ id: 'acme-reasoner', reasoningEfforts: { low: 'low', high: 'high' } }],
+    })
+    expect(profile).not.toHaveProperty('models.0.compat')
+    expect(profile).not.toHaveProperty('models.0.defaultReasoningEffort')
+  })
+
+  it('maps a disclosed off level to no effort', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([{
+      id: 'acme-off',
+      reasoning: { efforts: [{ id: 'off', name: 'off' }, { id: 'high', name: 'high' }] },
+    }])))
+    const { mutate, onClose } = mountCard({}, { discover })
+
+    fireEvent.change(screen.getByLabelText(en.customRoute), { target: { value: 'acme' } })
+    fireEvent.change(screen.getByLabelText(en.baseUrl), { target: { value: 'https://acme.test/v1' } })
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    fireEvent.click(screen.getByText(en.create))
+
+    await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
+    expect(firstMutate(mutate).ops[0]?.value).toMatchObject({
+      models: [{ id: 'acme-off', reasoningEfforts: { off: null, high: 'high' } }],
+    })
+  })
+
+  it('keeps a kept row’s compat switches when it adopts disclosed reasoning', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([{
+      id: 'kept',
+      reasoning: { efforts: [{ id: 'high', name: 'high' }], defaultEffort: 'high' },
+    }])))
+    const { mutate } = await mountSection({
+      discover,
+      providers: {
+        'acme-gateway': {
+          api: 'anthropic-messages',
+          baseURL: 'https://acme.test',
+          models: [{ id: 'kept', compat: { supportsTemperature: false } }],
+        },
+      },
+    })
+    openEditor('acme-gateway')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalled() })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual([{
+      id: 'kept',
+      compat: { supportsTemperature: false },
+      reasoningEfforts: { high: 'high' },
+      defaultReasoningEffort: 'high',
+    }])
+  })
+
+  it('adds adaptive thinking when a kept Anthropic row adopts disclosed reasoning', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([{
+      id: 'bare',
+      reasoning: { efforts: [{ id: 'high', name: 'high' }], defaultEffort: 'high' },
+    }])))
+    const { mutate } = await mountSection({
+      discover,
+      providers: {
+        'acme-gateway': {
+          api: 'anthropic-messages',
+          baseURL: 'https://acme.test',
+          models: [{ id: 'bare' }],
+        },
+      },
+    })
+    openEditor('acme-gateway')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalled() })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual([{
+      id: 'bare',
+      reasoningEfforts: { high: 'high' },
+      defaultReasoningEffort: 'high',
+      compat: { forceAdaptiveThinking: true },
+    }])
+  })
+
+  it('adds adaptive thinking without replacing levels a kept row declares', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([{
+      id: 'tuned',
+      reasoning: {
+        efforts: [{ id: 'low', name: 'low' }, { id: 'high', name: 'high' }],
+        defaultEffort: 'high',
+      },
+    }])))
+    const { mutate } = await mountSection({
+      discover,
+      providers: {
+        'acme-gateway': {
+          api: 'anthropic-messages',
+          baseURL: 'https://acme.test',
+          models: [{ id: 'tuned', reasoningEfforts: { high: 'high' } }],
+        },
+      },
+    })
+    openEditor('acme-gateway')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalled() })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual([{
+      id: 'tuned',
+      reasoningEfforts: { high: 'high' },
+      compat: { forceAdaptiveThinking: true },
+    }])
   })
 
   it('scopes each card to fields a provider can actually own', async () => {

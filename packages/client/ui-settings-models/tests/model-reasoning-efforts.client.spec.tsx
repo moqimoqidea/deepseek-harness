@@ -77,6 +77,29 @@ describe('ModelReasoningEfforts', () => {
     expect(levels()).toEqual(['off', 'low', 'medium', 'high'])
   })
 
+  it('keeps a default level the edit still offers and drops one it removes', () => {
+    const { writes } = renderGroup({
+      id: 'chat',
+      reasoningEfforts: { low: 'low', high: 'high' },
+      defaultReasoningEffort: 'high',
+    })
+    fireEvent.change(select(1), { target: { value: 'medium' } })
+    expect(writes.at(-1)?.['defaultReasoningEffort']).toBe('high')
+
+    fireEvent.change(select(2), { target: { value: 'max' } })
+    expect(writes.at(-1)).not.toHaveProperty('defaultReasoningEffort')
+  })
+
+  it('drops the default level with the reasoning field when switched off', () => {
+    const { writes } = renderGroup({
+      id: 'chat',
+      reasoningEfforts: { high: 'high' },
+      defaultReasoningEffort: 'high',
+    })
+    fireEvent.click(toggle())
+    expect(writes.at(-1)).toEqual({ id: 'chat' })
+  })
+
   it('removes the field when switched off and starts from the defaults when switched back on', () => {
     const { writes } = renderGroup({ id: 'chat', reasoningEfforts: { off: 'none', high: 'deep' } })
     fireEvent.click(toggle())

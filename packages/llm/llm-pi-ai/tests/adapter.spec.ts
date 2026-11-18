@@ -949,6 +949,46 @@ describe('provider profile lifecycle', () => {
     expect(server.requests[2]).not.toHaveProperty('output_config')
   })
 
+  it('materializes a model default effort and dispatches it as adaptive thinking', async () => {
+    vi.stubEnv('PI_TEST_KEY', 'test-key')
+    const server = await mockServer([{ events: anthropicTextEvents }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        'adaptive-gateway': {
+          apiKeyEnv: 'PI_TEST_KEY',
+          api: 'anthropic-messages',
+          baseURL: server.url,
+          models: [{
+            id: 'default-high',
+            contextWindow: 65_536,
+            maxTokens: 4096,
+            reasoningEfforts: { low: 'low', high: 'high' },
+            defaultReasoningEffort: 'high',
+            compat: { forceAdaptiveThinking: true },
+          }],
+        },
+      },
+    })
+
+    await expect(ctx.llm.resolveModelInfo('adaptive-gateway', 'default-high')).resolves.toMatchObject({
+      reasoning: {
+        efforts: [
+          { id: brandString<ReasoningEffortId>('low') },
+          { id: brandString<ReasoningEffortId>('high') },
+        ],
+        defaultEffort: brandString<ReasoningEffortId>('high'),
+      },
+    })
+
+    await assemble(ctx, { provider: 'adaptive-gateway', model: 'default-high', maxTokens: 64, messages: [] })
+    expect(server.requests[0]).toMatchObject({
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    })
+  })
+
   it('accepts absent credentials for pi-ai ambient authentication', async () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'ambient-key')
     const server = await mockServer([{ events: textEvents }])

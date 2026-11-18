@@ -138,14 +138,87 @@ function capacitySpelling(value: number | undefined): string {
   return value === undefined ? '' : formatCapacity(value)
 }
 
-/** Adopt a candidate, preserving disclosed capacities and input types. */
-function adopt(candidate: LlmDiscoveredModel): ModelDraft {
+/**
+ * The `reasoningEfforts` a disclosed reasoning declaration translates to. Each
+ * level is sent under its own name, and `off` sends no effort. A declaration
+ * offering only `off` leaves nothing to select, so it is not a capability.
+ * @param reasoning - the candidate's disclosed reasoning metadata, if any.
+ * @returns levels by profile key, or `undefined` when none is selectable.
+ */
+function reasoningEffortsOf(
+  reasoning: LlmDiscoveredModel['reasoning'],
+): Record<string, string | null> | undefined {
+  if (reasoning === undefined || !reasoning.efforts.some(effort => effort.id !== 'off')) return undefined
+  return Object.fromEntries(reasoning.efforts.map(effort => [effort.id, effort.id === 'off' ? null : effort.id]))
+}
+
+/**
+ * The profile fields a disclosed reasoning declaration translates to. A level
+ * the endpoint publishes is sent under its own name. An Anthropic-compatible
+ * endpoint publishing efforts reads them from `output_config.effort`, which
+ * pi-ai sends only for adaptive thinking.
+ * @param reasoning - the candidate's disclosed reasoning metadata, if any.
+ * @param api - protocol the route speaks, when chosen.
+ * @returns profile fields, or `undefined` when no level is selectable.
+ */
+function reasoningFields(
+  reasoning: LlmDiscoveredModel['reasoning'],
+  api: string | undefined,
+): {
+  reasoningEfforts: Record<string, string | null>
+  defaultReasoningEffort?: string
+  compat?: { forceAdaptiveThinking: true }
+} | undefined {
+  const efforts = reasoningEffortsOf(reasoning)
+  if (efforts === undefined) return undefined
+  const defaultEffort = reasoning?.defaultEffort
+  return {
+    reasoningEfforts: efforts,
+    ...defaultEffort === undefined || !reasoning?.efforts.some(effort => effort.id === defaultEffort)
+      ? {}
+      : { defaultReasoningEffort: defaultEffort },
+    ...api === 'anthropic-messages' ? { compat: { forceAdaptiveThinking: true as const } } : {},
+  }
+}
+
+/**
+ * Adopt a candidate, preserving disclosed capacities, input types, and
+ * reasoning.
+ * @param candidate - one model the endpoint disclosed.
+ * @param api - protocol the route speaks, when chosen.
+ * @returns the drafted profile row.
+ */
+function adopt(candidate: LlmDiscoveredModel, api: string | undefined): ModelDraft {
   return {
     id: candidate.id,
     ...candidate.name === undefined ? {} : { name: candidate.name },
     ...candidate.contextWindow === undefined ? {} : { contextWindow: candidate.contextWindow },
     ...candidate.maxTokens === undefined ? {} : { maxTokens: candidate.maxTokens },
     ...candidate.inputModalities === undefined ? {} : { input: [...candidate.inputModalities] },
+    ...reasoningFields(candidate.reasoning, api),
+  }
+}
+
+/**
+ * Fill reasoning a kept row does not declare from the candidate that names it,
+ * and the protocol compat its declared efforts need. A row that already
+ * declares either keeps its own.
+ * @param row - configured row the picker keeps.
+ * @param candidate - the listed candidate with the same id.
+ * @param api - protocol the route speaks, when chosen.
+ * @returns the row with missing reasoning fields added.
+ */
+function fillReasoning(row: ModelDraft, candidate: LlmDiscoveredModel, api: string | undefined): ModelDraft {
+  const fields = reasoningFields(candidate.reasoning, api)
+  if (fields === undefined) return row
+  const { compat, ...rest } = fields
+  const adoptLevels = row['reasoningEfforts'] === undefined
+  const adoptCompat = compat !== undefined && row['compat'] === undefined
+  if (!adoptLevels && !adoptCompat) return row
+  return {
+    ...row,
+    ...adoptLevels ? rest : {},
+    ...adoptCompat ? { compat } : {},
   }
 }
 
@@ -264,12 +337,19 @@ export function ModelListEditor(props: ModelListEditorProps): ReactNode {
     const id = textOf(model, 'id')
     if (listed.has(id) && !isPicked(id)) removedRows.add(at)
   })
-  // A kept row the user already tuned wins over the provider's own numbers.
-  const keptRows = models.filter((_model, at) => !removedRows.has(at))
+  const candidatesById = new Map(activeCandidates.map(candidate => [candidate.id, candidate]))
+  // A kept row the user already tuned wins over the provider's own numbers,
+  // but reasoning it never declared is adopted along with the listing.
+  const keptRows = models
+    .filter((_model, at) => !removedRows.has(at))
+    .map((model) => {
+      const candidate = candidatesById.get(textOf(model, 'id'))
+      return candidate === undefined ? model : fillReasoning(model, candidate, probe.api)
+    })
   const keptIds = new Set(keptRows.map(model => textOf(model, 'id')))
   const addedRows = activeCandidates
     .filter(candidate => isPicked(candidate.id) && !keptIds.has(candidate.id))
-    .map(adopt)
+    .map(candidate => adopt(candidate, probe.api))
   // An empty list serves the whole catalog, so emptying a non-empty list
   // would restore every model instead of removing the unchecked ones.
   const emptiesList = models.length > 0 && keptRows.length === 0 && addedRows.length === 0

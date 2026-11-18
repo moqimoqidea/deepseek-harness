@@ -17,17 +17,23 @@
  * through their native model-listing endpoints. The OpenAI and Anthropic parser
  * accepts the standard `data` array and the enriched `models` map some
  * compatible gateways expose; Gemini replies with its own `models` array.
- * Every other protocol reports that it cannot be interrogated so the surface
- * falls back to hand-entry rather than guessing its response fields.
+ * Entries that also carry DeepSeek's documented `effort` object disclose the
+ * reasoning levels the endpoint accepts, which the reply preserves for
+ * adoption beside the capacities. Every other protocol reports that it cannot
+ * be interrogated so the surface falls back to hand-entry rather than guessing
+ * its response fields.
  *
  * @module dsh-llm-pi-ai/discovery
  */
 
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { normalizeApiKey } from '@deepseek-ai/dsh-credentials'
 import { INVALID_CREDENTIAL_CODE, LlmError } from '@deepseek-ai/dsh-llm'
-import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
+import type {
+  LlmDiscoveredModel, LlmModelDiscoveryOperation, LlmModelReasoningInfo, ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
-import { catalogModels } from './catalog.ts'
+import { catalogModels, THINKING_LEVELS } from './catalog.ts'
 
 /**
  * Protocols whose model listing this module can read. OpenAI protocols use
@@ -77,6 +83,16 @@ interface ListingTopProvider {
   max_completion_tokens?: unknown
 }
 
+/**
+ * The reasoning metadata DeepSeek's public listing documents. `supported_levels`
+ * names the values the endpoint's reasoning field accepts, and `default_level`
+ * the value a request naming none receives.
+ */
+interface ListingEffort {
+  supported_levels?: unknown
+  default_level?: unknown
+}
+
 /** One entry of a supported `GET /models` reply. */
 interface ListingEntry {
   id?: unknown
@@ -94,6 +110,7 @@ interface ListingEntry {
   maxTokens?: unknown
   limit?: ListingLimit | null
   top_provider?: ListingTopProvider | null
+  effort?: ListingEffort | null
 }
 
 /** A positive integer field of a listing entry, or `undefined` when absent or unusable. */
@@ -110,6 +127,30 @@ function label(...candidates: readonly unknown[]): string | undefined {
     if (typeof candidate === 'string' && candidate.length > 0) return candidate
   }
   return undefined
+}
+
+/**
+ * Read the reasoning efforts one listing entry declares. Only levels this
+ * adapter can name in `reasoningEfforts` are adopted: an unknown spelling has
+ * no pi-ai level to select, and an `off`-only declaration leaves nothing to
+ * choose. The default is kept only when it names an adopted level.
+ * @param entry - one listing entry.
+ * @returns the selectable efforts and default, or `undefined` when none is readable.
+ */
+function reasoningOf(entry: ListingEntry): LlmModelReasoningInfo | undefined {
+  const effort = entry.effort
+  if (effort === null || typeof effort !== 'object' || Array.isArray(effort)) return undefined
+  const declared = effort.supported_levels
+  if (!Array.isArray(declared)) return undefined
+  const levels = THINKING_LEVELS.filter(level => declared.includes(level))
+  if (!levels.some(level => level !== 'off')) return undefined
+  const defaultLevel = effort.default_level
+  return {
+    efforts: levels.map(level => ({ id: brandString<ReasoningEffortId>(level), name: level })),
+    ...typeof defaultLevel === 'string' && levels.some(level => level === defaultLevel)
+      ? { defaultEffort: brandString<ReasoningEffortId>(defaultLevel) }
+      : {},
+  }
 }
 
 /**
@@ -211,30 +252,34 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
   }
   const models: LlmDiscoveredModel[] = []
   for (const { key, raw } of listed) {
-    const entry = raw as ListingEntry | null
-    const id = label(key, entry?.id)
+    // `null` becomes an empty record so the property reads below are safe; a
+    // row with no usable id is skipped before it contributes a model.
+    const entry = (raw ?? {}) as ListingEntry
+    const id = label(key, entry.id)
     if (id === undefined) continue
-    const name = label(entry?.name, entry?.display_name, entry?.displayName) ?? id
+    const name = label(entry.name, entry.display_name, entry.displayName) ?? id
     const contextWindow = capacity(
-      entry?.contextWindow,
-      entry?.context_window,
-      entry?.context_length,
-      entry?.max_input_tokens,
-      entry?.limit?.context,
+      entry.contextWindow,
+      entry.context_window,
+      entry.context_length,
+      entry.max_input_tokens,
+      entry.limit?.context,
     )
     const maxTokens = capacity(
-      entry?.maxOutputTokens,
-      entry?.max_output_tokens,
-      entry?.maxTokens,
-      entry?.max_tokens,
-      entry?.limit?.output,
-      entry?.top_provider?.max_completion_tokens,
+      entry.maxOutputTokens,
+      entry.max_output_tokens,
+      entry.maxTokens,
+      entry.max_tokens,
+      entry.limit?.output,
+      entry.top_provider?.max_completion_tokens,
     )
+    const reasoning = reasoningOf(entry)
     models.push({
       id,
       name,
       ...contextWindow === undefined ? {} : { contextWindow },
       ...maxTokens === undefined ? {} : { maxTokens },
+      ...reasoning === undefined ? {} : { reasoning },
     })
   }
   return models

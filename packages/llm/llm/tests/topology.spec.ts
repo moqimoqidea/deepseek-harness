@@ -236,17 +236,29 @@ describe('model discovery registry', () => {
       .resolves.toEqual([])
   })
 
-  it('preserves discovered input types without inventing missing metadata', async () => {
+  it('preserves discovered capabilities without inventing missing metadata', async () => {
     const ctx = await setup()
     ctx.llm.registerModelDiscovery('llm-example', () => Promise.resolve([
-      { id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256, inputModalities: ['text', 'image'] },
+      {
+        id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256, inputModalities: ['text', 'image'],
+        reasoning: {
+          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High', description: 'Hard tasks' }],
+          defaultEffort: 'high',
+        },
+      },
       { id: '' },
       { id: 'keep' },
       { id: 'bare' },
     ] as never))
 
     expect(await ctx.llm.discoverModels('llm-example', { baseURL: 'https://gateway.example/v1' })).toEqual([
-      { id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256, inputModalities: ['text', 'image'] },
+      {
+        id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256, inputModalities: ['text', 'image'],
+        reasoning: {
+          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High', description: 'Hard tasks' }],
+          defaultEffort: 'high',
+        },
+      },
       { id: 'bare' },
     ])
   })
@@ -255,7 +267,10 @@ describe('model discovery registry', () => {
     const ctx = await setup()
     const discover = vi.fn()
       .mockResolvedValueOnce([
-        { id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256 },
+        {
+          id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256,
+          reasoning: { efforts: [{ id: 'low', name: 'Low' }], defaultEffort: 'low' },
+        },
         { id: '' },
         { id: 'keep' },
         { id: 'bare' },
@@ -270,7 +285,10 @@ describe('model discovery registry', () => {
       { baseURL: 'https://gateway.example/v1' },
       signal,
     )).resolves.toEqual([
-      { id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256 },
+      {
+        id: 'keep', name: 'Keep', contextWindow: 1024, maxTokens: 256,
+        reasoning: { efforts: [{ id: 'low', name: 'Low' }], defaultEffort: 'low' },
+      },
       { id: 'bare' },
     ])
     expect(discover).toHaveBeenNthCalledWith(

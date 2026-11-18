@@ -33,6 +33,16 @@ describe('reasoning schema boundary', () => {
     expect(configWith({ reasoningEfforts: { high: 42 } })).toThrow()
   })
 
+  it('accepts a known default level and rejects an unknown one at the write', () => {
+    type Materialized = { providers: Record<string, { models?: { defaultReasoningEffort?: unknown }[] }> }
+    const accepted = configWith({
+      reasoningEfforts: { high: 'high' },
+      defaultReasoningEffort: 'high',
+    })() as Materialized
+    expect(accepted.providers['acme-gateway']?.models?.[0]?.defaultReasoningEffort).toBe('high')
+    expect(configWith({ defaultReasoningEffort: 'ultra' })).toThrow()
+  })
+
   it('keeps false distinguishable from an absent declaration', () => {
     type Materialized = { providers: Record<string, { models?: { reasoningEfforts?: unknown }[] }> }
     const withFalse = configWith({ reasoningEfforts: false })() as Materialized
