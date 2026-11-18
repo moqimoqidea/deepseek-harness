@@ -16,9 +16,10 @@
  * OpenAI-compatible, Anthropic Messages, and Gemini protocols are interrogated
  * through their native model-listing endpoints. The OpenAI and Anthropic parser
  * accepts the standard `data` array and the enriched `models` map some
- * compatible gateways expose; Gemini replies with its own `models` array.
- * Every other protocol reports that it cannot be interrogated so the surface
- * falls back to hand-entry rather than guessing its response fields.
+ * compatible gateways expose, preserving advertised input modalities and
+ * output-token capacities; Gemini replies with its own `models` array. Every
+ * other protocol reports that it cannot be interrogated so the surface falls
+ * back to hand-entry rather than guessing its response fields.
  *
  * @module dsh-llm-pi-ai/discovery
  */
@@ -27,7 +28,7 @@ import { normalizeApiKey } from '@deepseek-ai/dsh-credentials'
 import { INVALID_CREDENTIAL_CODE, LlmError } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
-import { catalogModels } from './catalog.ts'
+import { catalogModels, MODALITIES } from './catalog.ts'
 
 /**
  * Protocols whose model listing this module can read. OpenAI protocols use
@@ -77,6 +78,11 @@ interface ListingTopProvider {
   max_completion_tokens?: unknown
 }
 
+/** Input declarations OpenRouter nests under one entry. */
+interface ListingArchitecture {
+  input_modalities?: unknown
+}
+
 /** One entry of a supported `GET /models` reply. */
 interface ListingEntry {
   id?: unknown
@@ -94,6 +100,8 @@ interface ListingEntry {
   maxTokens?: unknown
   limit?: ListingLimit | null
   top_provider?: ListingTopProvider | null
+  input_modalities?: unknown
+  architecture?: ListingArchitecture | null
 }
 
 /** A positive integer field of a listing entry, or `undefined` when absent or unusable. */
@@ -110,6 +118,20 @@ function label(...candidates: readonly unknown[]): string | undefined {
     if (typeof candidate === 'string' && candidate.length > 0) return candidate
   }
   return undefined
+}
+
+/**
+ * Request modalities a listing entry advertises. Only types this adapter can
+ * configure are kept; an absent, unreadable, or empty declaration states no
+ * answer, leaving the row's default input in effect.
+ * @param entry - one listing entry.
+ * @returns advertised modalities in pi-ai's order, or `undefined` when none is usable.
+ */
+function inputModalitiesOf(entry: ListingEntry): LlmDiscoveredModel['inputModalities'] | undefined {
+  const declared = entry.input_modalities ?? entry.architecture?.input_modalities
+  if (!Array.isArray(declared)) return undefined
+  const modalities = MODALITIES.filter(modality => declared.includes(modality))
+  return modalities.length === 0 ? undefined : modalities
 }
 
 /**
@@ -187,7 +209,8 @@ async function readBounded(response: Response, url: string): Promise<string> {
  * Entries without a usable id are skipped rather than failing the whole
  * interrogation: a single malformed row should not deny the user the rest of
  * a working endpoint's catalog. Missing names fall back to the adopted id so
- * the Web form receives a complete human-readable row.
+ * the Web form receives a complete human-readable row. Request modalities are
+ * present only when the entry advertises at least one this adapter supports.
  */
 function readListing(body: unknown): LlmDiscoveredModel[] {
   const listing = body as { data?: unknown; models?: unknown } | null
@@ -214,6 +237,8 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
     const entry = raw as ListingEntry | null
     const id = label(key, entry?.id)
     if (id === undefined) continue
+    // Only an object row can carry an id, so every row reaching here is one.
+    const listedEntry = entry as ListingEntry
     const name = label(entry?.name, entry?.display_name, entry?.displayName) ?? id
     const contextWindow = capacity(
       entry?.contextWindow,
@@ -230,11 +255,13 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
       entry?.limit?.output,
       entry?.top_provider?.max_completion_tokens,
     )
+    const inputModalities = inputModalitiesOf(listedEntry)
     models.push({
       id,
       name,
       ...contextWindow === undefined ? {} : { contextWindow },
       ...maxTokens === undefined ? {} : { maxTokens },
+      ...inputModalities === undefined ? {} : { inputModalities },
     })
   }
   return models

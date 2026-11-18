@@ -652,8 +652,36 @@ describe('endpoint interrogation', () => {
     fireEvent.click(screen.getByText(en.apply))
     await waitFor(() => { expect(mutate).toHaveBeenCalled() })
     expect(firstMutate(mutate).ops[0]?.value).toEqual([
-      { id: 'kept', contextWindow: 111 },
+      { id: 'kept', contextWindow: 111, input: ['text', 'image'] },
       { id: 'fresh', contextWindow: 4096, maxTokens: 2048, name: 'Fresh', input: ['text', 'image'] },
+    ])
+  })
+
+  it('adds disclosed input modalities to a kept model and keeps an explicit declaration', async () => {
+    const discover = vi.fn(() => Promise.resolve(ok([
+      { id: 'vision', inputModalities: ['text', 'image'] },
+      { id: 'text-only', inputModalities: ['text'] },
+    ])))
+    const { mutate } = await mountSection({
+      discover,
+      providers: {
+        openai: {
+          baseURL: 'https://proxy.example/v1',
+          models: [{ id: 'vision' }, { id: 'text-only', input: ['image'] }],
+        },
+      },
+    })
+    openEditor('openai')
+
+    fireEvent.click(screen.getByText(en.fetchModels))
+    await screen.findByText(en.fetchTitle)
+    fireEvent.click(screen.getByText(en.fetchAdopt))
+    fireEvent.click(screen.getByText(en.apply))
+
+    await waitFor(() => { expect(mutate).toHaveBeenCalled() })
+    expect(firstMutate(mutate).ops[0]?.value).toEqual([
+      { id: 'vision', input: ['text', 'image'] },
+      { id: 'text-only', input: ['image'] },
     ])
   })
 
